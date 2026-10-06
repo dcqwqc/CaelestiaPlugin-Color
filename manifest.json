@@ -1,0 +1,11 @@
+{
+  "name": "Color",
+  "version": "0.1.0",
+  "author": "dcqwqc",
+  "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-Color",
+  "icon": "palette",
+  "description": "Exact Caelestia colour control: accent, Material palette roles, Hyprland chrome and folder icon colours. Hardware RGB is intentionally separate.",
+  "entryPoints": [],
+  "settings": "Settings.qml",
+  "settingsUi": "SettingsUi.qml"
+}
