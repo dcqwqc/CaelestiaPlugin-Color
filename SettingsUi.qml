@@ -9,6 +9,7 @@ import qs.components
 import qs.components.controls
 import qs.modules.nexus.common
 import qs.services
+import dcqwqc.color
 
 ColumnLayout {
     id: root
