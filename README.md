@@ -10,6 +10,23 @@ The plugin owns the persistent `~/.config/caelestia/color_overrides.json` workfl
 
 Enable `dcqwqc/color` in Caelestia and run `./install.sh` once so existing Caelestia post-hooks point at the plugin-owned helpers. Existing override data is preserved.
 
+## Quick colors in Caelestia
+
+The main **Wallpaper & style → Colours** page now hosts the Color plugin's
+`QuickColors.qml` as its first section (with the matching
+`kagami-caelestia` shell integration). This is a **single shared component**:
+the plugin's own Settings page also embeds it; there are no independent pickers
+to drift out of sync. Moving the large white ring previews the new hue/tone
+alongside two lighter/darker white rings, with separate **Primary / Accent**
+seeds. Release to save.
+
+The quick section shows the wallpaper-linked profile name or the global mode,
+offers **Save for wallpaper**, **Unlink**, **Undo**, and a collapsed chooser for
+existing saved profiles. The old extensive color-role controls remain under
+**Advanced color settings** in the native Colours page. If the Color plugin is
+disabled or missing, the native advanced controls are available and no plugin
+file is loaded.
+
 ## Wallpaper-linked profiles
 
 Color → **Wallpaper-linked profiles** creates a named snapshot of your existing colors and links it to the current wallpaper. The spectrum edits global primary/accent colors directly when there is no wallpaper profile linked; creating/linking a profile redirects edits to the linked profile without modifying the global values. The **Harmony spectrum** is a two-dimensional hue/tone field (rainbow vertical, light-to-dark horizontal). One large, plain white **Base ring** selects the seed color; two smaller white rings follow on either side for Light and Dark. There are no letters, decorative symbols or additional harmony modes. The matching swatches update as you drag, and the seed is saved only on release. Switch between independent Primary and Accent seeds; Material 3 regenerates secondary/tertiary tonal variants and contrast rather than tinting every role identically. The three guide markers approximate tonal relationships in HSL; the rendered Material 3 colors are the source of truth. The picker offers an immediate live preview inside its color swatches; the desktop only changes when you release the pointer. Undo restores the last stored profile operation. The existing exact per-role editor remains available.
