@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import glob
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
@@ -100,6 +101,11 @@ def generate_custom_papirus(hex_color):
 
 
 def main():
+    # apply_colours invokes the configured theme postHook. Since this script
+    # *is* the hook, nested invocations must stop immediately. Otherwise the
+    # entire palette and Papirus workflow runs twice for a single selection.
+    if os.environ.get("CAELESTIA_COLOR_REENTRANT") == "1":
+        return
     config_dir = Path.home() / ".config/caelestia"
     overrides_file = config_dir / "color_overrides.json"
 
@@ -175,7 +181,15 @@ def main():
     scheme._colours = colours
     scheme.save()
 
-    apply_colours(scheme.colours, scheme.mode)
+    old_guard = os.environ.get("CAELESTIA_COLOR_REENTRANT")
+    os.environ["CAELESTIA_COLOR_REENTRANT"] = "1"
+    try:
+        apply_colours(scheme.colours, scheme.mode)
+    finally:
+        if old_guard is None:
+            os.environ.pop("CAELESTIA_COLOR_REENTRANT", None)
+        else:
+            os.environ["CAELESTIA_COLOR_REENTRANT"] = old_guard
 
     # Ghostty intentionally stays dark even when the desktop is light, but its
     # terminal palette follows the dark variant of the active Caelestia scheme.
@@ -236,18 +250,26 @@ def main():
 
     folder_override = overrides.get("folder_color")
     papirus_folders = shutil.which("papirus-folders")
-    if folder_override and papirus_folders:
-        generate_custom_papirus(folder_override)
-        # Papirus-Light and Papirus-Dark symlink their larger size directories
-        # into the base Papirus theme, so the base theme has to be recoloured
-        # too or every icon above 24x24 stays upstream blue.
-        for theme in PAPIRUS_THEMES:
-            subprocess.run([papirus_folders, "-C", "custom", "-t", theme, "-u"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    elif papirus_folders:
-        for theme in PAPIRUS_THEMES:
-            subprocess.run([papirus_folders, "-D", "-t", theme, "-u"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        print("papirus-folders is not installed; keeping the current folder icons")
+    icon_stamp_path = Path.home() / ".local/state/caelestia/color-folder-stamp.json"
+    icon_stamp = {"color": folder_override or "", "papirus": bool(papirus_folders)}
+    try:
+        old_stamp = json.loads(icon_stamp_path.read_text())
+    except (OSError, ValueError):
+        old_stamp = None
+    if old_stamp != icon_stamp:
+        if folder_override and papirus_folders:
+            generate_custom_papirus(folder_override)
+            for theme in PAPIRUS_THEMES:
+                subprocess.run([papirus_folders, "-C", "custom", "-t", theme, "-u"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif papirus_folders:
+            for theme in PAPIRUS_THEMES:
+                subprocess.run([papirus_folders, "-D", "-t", theme, "-u"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        icon_stamp_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = icon_stamp_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(icon_stamp) + chr(10))
+        tmp.replace(icon_stamp_path)
 
     subprocess.run(["hyprctl", "reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
