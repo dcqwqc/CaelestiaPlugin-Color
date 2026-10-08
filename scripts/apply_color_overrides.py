@@ -9,6 +9,7 @@ import shutil
 
 from caelestia.utils.scheme import get_scheme
 from caelestia.utils.theme import apply_colours
+from color_profiles import merged_overrides
 
 ICON_ROOTS = [str(Path.home() / ".local/share/icons"), "/usr/share/icons"]
 PAPIRUS_THEMES = ["Papirus", "Papirus-Dark", "Papirus-Light"]
@@ -111,6 +112,9 @@ def main():
         except Exception:
             pass
 
+    # Apply wallpaper-linked colors as an in-memory overlay. Never overwrite
+    # the user's global overrides when switching wallpapers.
+    overrides = merged_overrides(overrides)
     primary_override = overrides.get("primary")
     desired_mode = overrides.get("mode")
 
@@ -140,6 +144,20 @@ def main():
     else:
         scheme._update_colours()
         colours = dict(scheme.colours)
+
+    accent_seed = overrides.get("accent")
+    if accent_seed:
+        try:
+            from materialyoucolor.hct import Hct
+            from caelestia.utils.material.generator import gen_scheme
+            accent_colours = gen_scheme(scheme, Hct.from_int(0xFF000000 | int(accent_seed, 16)))
+            # Both families preserve M3 tone steps and contrast. Exact role
+            # edits still take priority below.
+            for role, colour in accent_colours.items():
+                if role.startswith(("secondary", "tertiary", "onSecondary", "onTertiary")):
+                    colours[role] = colour
+        except Exception as e:
+            print("Accent palette generation failed:", e)
 
     # Per-role overrides are deliberately applied *after* Material 3 palette
     # generation. This makes the seed colour a convenient starting point while
@@ -177,6 +195,9 @@ def main():
         rendered_primary = str(scheme.colours.get("primary", primary_override or "89b4fa")).strip().lstrip("#")
         if not re.fullmatch(r"[0-9a-fA-F]{6}", rendered_primary):
             rendered_primary = "89b4fa"
+        rendered_secondary = str(scheme.colours.get("secondary", rendered_primary)).strip().lstrip("#")
+        if not re.fullmatch(r"[0-9a-fA-F]{6}", rendered_secondary):
+            rendered_secondary = rendered_primary
         ht_dir = Path.home() / ".config/hypr"
         ht_dir.mkdir(parents=True, exist_ok=True)
         ht_conf = ht_dir / "hyprtoolkit.conf"
@@ -189,7 +210,7 @@ def main():
             "alternate_base = 0xFF202020\n"
             "bright_text = 0xFFFFFFFF\n"
             f"accent = 0xFF{rendered_primary.upper()}\n"
-            f"accent_secondary = 0xFF{rendered_primary.upper()}\n"
+            f"accent_secondary = 0xFF{rendered_secondary.upper()}\n"
             "rounding_large = 14\n"
             "rounding_small = 8\n"
         )
