@@ -29,6 +29,13 @@ ColumnLayout {
     readonly property color lightPreview: Qt.hsla(wheelHue, wheelSaturation, lightTone, 1)
     readonly property color darkPreview: Qt.hsla(wheelHue, wheelSaturation, darkTone, 1)
     property bool spectrumDragging: false
+    property string confirmDeleteId: ""
+    property string editedRole: "primaryContainer"
+    property bool advancedOpen: false
+    readonly property var commonRoles: ["primary", "primaryContainer", "onPrimary",
+        "onPrimaryContainer", "secondary", "secondaryContainer", "tertiary",
+        "tertiaryContainer", "surface", "onSurface", "surfaceContainer",
+        "surfaceContainerHigh", "background", "onBackground", "outline"]
     readonly property string profileHelper: Qt.resolvedUrl("scripts/color_profiles.py").toString().replace("file://", "")
     readonly property string profilesPath: Quickshell.env("HOME") + "/.config/caelestia/wallpaper_profiles.json"
     readonly property string wallpaperPath: Quickshell.env("HOME") + "/.local/state/caelestia/wallpaper/path.txt"
@@ -218,42 +225,66 @@ ColumnLayout {
         wrapMode: Text.Wrap
     }
 
-    ColourRow {
-        keyName: "primary"
-        label: qsTr("System accent")
-        fallback: Colours.palette.m3primary
-    }
+    SectionHeader { text: qsTr("Wallpaper color profiles") }
 
-    ColourRow {
-        keyName: "hyprland_border"
-        label: qsTr("Hyprland border")
-        fallback: Colours.palette.m3primary
-    }
-
-    ColourRow {
-        keyName: "folder_color"
-        label: qsTr("Folder icons")
-        fallback: Colours.palette.m3primary
-    }
-
-    SectionHeader { text: qsTr("Wallpaper-linked profiles") }
-
-    StyledText {
+    StyledRect {
         Layout.fillWidth: true
-        text: root.profileState.activeProfileId
-            ? qsTr("Linked: %1").arg(root.profileState.activeProfile?.name || qsTr("Unnamed"))
-            : qsTr("No profile linked. Your global colors remain unchanged.")
-        color: Colours.palette.m3outline
-        font: Tokens.font.body.medium
-        wrapMode: Text.Wrap
+        implicitHeight: wallpaperDetails.implicitHeight + Tokens.padding.medium * 2
+        color: Colours.tPalette.m3surfaceContainer
+        radius: Tokens.rounding.large
+
+        RowLayout {
+            id: wallpaperDetails
+            anchors.fill: parent
+            anchors.margins: Tokens.padding.medium
+            spacing: Tokens.spacing.medium
+
+            StyledRect {
+                implicitWidth: 82
+                implicitHeight: 55
+                radius: Tokens.rounding.medium
+                color: Colours.tPalette.m3surfaceContainerHigh
+                clip: true
+                Image {
+                    anchors.fill: parent
+                    asynchronous: true
+                    cache: false
+                    source: Wallpapers.current
+                    fillMode: Image.PreserveAspectCrop
+                }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: Tokens.spacing.extraSmall
+                StyledText {
+                    Layout.fillWidth: true
+                    text: root.profileState.activeProfileId
+                        ? root.profileState.activeProfile?.name || qsTr("Unnamed profile")
+                        : qsTr("Global colors")
+                    color: Colours.palette.m3onSurface
+                    font: Tokens.font.body.medium
+                    elide: Text.ElideRight
+                }
+                StyledText {
+                    Layout.fillWidth: true
+                    text: root.profileState.activeProfileId
+                        ? qsTr("Bound to current wallpaper")
+                        : qsTr("No linked profile — editing global colors")
+                    color: Colours.palette.m3outline
+                    font: Tokens.font.label.small
+                    wrapMode: Text.Wrap
+                }
+            }
+        }
     }
 
     RowLayout {
         Layout.fillWidth: true
-        spacing: Tokens.spacing.small
+        spacing: Tokens.spacing.extraSmall
         IconTextButton {
-            icon: "add_circle"
-            text: qsTr("Save colors as profile")
+            icon: "add"
+            text: qsTr("New profile")
             type: IconTextButton.Tonal
             onClicked: root.profileRun(["create"])
         }
@@ -264,17 +295,92 @@ ColumnLayout {
             type: IconTextButton.Text
             onClicked: root.profileRun(["unlink"])
         }
+        IconTextButton {
+            icon: "undo"
+            text: qsTr("Undo")
+            enabled: !!root.profileState.canUndo
+            type: IconTextButton.Text
+            onClicked: root.profileRun(["undo"])
+        }
     }
 
-    Repeater {
-        model: Object.keys(root.profileState.profiles || ({}))
-        delegate: IconTextButton {
-            required property string modelData
+    CollapsibleSection {
+        title: qsTr("Saved profiles (%1)").arg(Object.keys(root.profileState.profiles || ({})).length)
+        description: qsTr("Select a profile to link it to the current wallpaper. Profiles can be reused across wallpapers.")
+        expanded: false
+        showBackground: true
+
+        Repeater {
+            model: Object.keys(root.profileState.profiles || ({}))
+            delegate: IconTextButton {
+                required property string modelData
+                Layout.fillWidth: true
+                icon: modelData === root.profileState.activeProfileId ? "radio_button_checked" : "radio_button_unchecked"
+                text: root.profileState.profiles[modelData]?.name || qsTr("Untitled")
+                type: modelData === root.profileState.activeProfileId ? IconTextButton.Tonal : IconTextButton.Text
+                onClicked: root.profileRun(["link", "--id", modelData])
+            }
+        }
+    }
+
+    CollapsibleSection {
+        visible: !!root.profileState.activeProfileId
+        title: qsTr("Manage current profile")
+        expanded: false
+
+        StyledText {
+            text: qsTr("Rename this profile")
+            color: Colours.palette.m3outline
+            font: Tokens.font.label.small
+        }
+        StyledRect {
             Layout.fillWidth: true
-            icon: modelData === root.profileState.activeProfileId ? "radio_button_checked" : "radio_button_unchecked"
-            text: root.profileState.profiles[modelData]?.name || qsTr("Untitled")
-            type: modelData === root.profileState.activeProfileId ? IconTextButton.Tonal : IconTextButton.Text
-            onClicked: root.profileRun(["link", "--id", modelData])
+            implicitHeight: 42
+            radius: Tokens.rounding.medium
+            color: Colours.tPalette.m3surfaceContainerHighest
+            StyledTextField {
+                id: profileNameField
+                anchors.fill: parent
+                anchors.leftMargin: Tokens.padding.medium
+                anchors.rightMargin: Tokens.padding.medium
+                text: root.profileState.activeProfile?.name || ""
+                onEditingFinished: {
+                    if (root.profileState.activeProfileId && text.trim())
+                        root.profileRun(["edit", "--id", root.profileState.activeProfileId,
+                                         "--name", text.trim()]);
+                }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Tokens.spacing.extraSmall
+            IconTextButton {
+                icon: "content_copy"
+                text: qsTr("Duplicate")
+                type: IconTextButton.Tonal
+                onClicked: root.profileRun(["duplicate", "--id", root.profileState.activeProfileId])
+            }
+            IconTextButton {
+                icon: "delete"
+                text: root.confirmDeleteId === root.profileState.activeProfileId ? qsTr("Confirm delete") : qsTr("Delete")
+                type: IconTextButton.Text
+                onClicked: {
+                    if (root.confirmDeleteId === root.profileState.activeProfileId) {
+                        root.profileRun(["delete", "--id", root.profileState.activeProfileId]);
+                        root.confirmDeleteId = "";
+                    } else {
+                        root.confirmDeleteId = root.profileState.activeProfileId;
+                    }
+                }
+            }
+            IconTextButton {
+                visible: root.confirmDeleteId === root.profileState.activeProfileId
+                icon: "close"
+                text: qsTr("Cancel")
+                type: IconTextButton.Text
+                onClicked: root.confirmDeleteId = ""
+            }
         }
     }
 
@@ -347,91 +453,35 @@ ColumnLayout {
                 }
             }
 
-            // These two smaller markers are derived tones, not independent
-            // controls. Their positions follow the primary Base marker.
-            Rectangle {
-                id: lightMarker
+            // Three simple white rings. Only Base (large) is draggable.
+            // Satellites share the Base hue and follow horizontally.
+            component SpectrumRing : Rectangle {
+                required property real tone
+                required property real hue
+                required property int diameter
                 x: Math.max(2, Math.min(spectrumSurface.width - width - 2,
-                    (1 - root.lightTone) * spectrumSurface.width - width / 2))
+                    (1 - tone) * spectrumSurface.width - width / 2))
                 y: Math.max(2, Math.min(spectrumSurface.height - height - 2,
-                    root.wheelHue * spectrumSurface.height - height / 2))
-                width: 24
-                height: 24
+                    hue * spectrumSurface.height - height / 2))
+                width: diameter
+                height: diameter
                 radius: width / 2
-                color: root.lightPreview
-                border.width: 2
-                border.color: "#303030"
-                z: 2
-                Behavior on x {
-                    NumberAnimation { duration: 105; easing.type: Easing.OutCubic }
-                }
-                Behavior on y {
-                    NumberAnimation { duration: 105; easing.type: Easing.OutCubic }
-                }
-                Text {
-                    anchors.centerIn: parent
-                    text: "L"
-                    font.pixelSize: 11
-                    font.weight: Font.Bold
-                    color: "#171717"
-                }
-            }
-            Rectangle {
-                id: darkMarker
-                x: Math.max(2, Math.min(spectrumSurface.width - width - 2,
-                    (1 - root.darkTone) * spectrumSurface.width - width / 2))
-                y: Math.max(2, Math.min(spectrumSurface.height - height - 2,
-                    root.wheelHue * spectrumSurface.height - height / 2))
-                width: 24
-                height: 24
-                radius: width / 2
-                color: root.darkPreview
-                border.width: 2
-                border.color: "#f5f5f5"
-                z: 2
-                Behavior on x {
-                    NumberAnimation { duration: 105; easing.type: Easing.OutCubic }
-                }
-                Behavior on y {
-                    NumberAnimation { duration: 105; easing.type: Easing.OutCubic }
-                }
-                Text {
-                    anchors.centerIn: parent
-                    text: "D"
-                    font.pixelSize: 11
-                    font.weight: Font.Bold
-                    color: "#ffffff"
-                }
-            }
-            Rectangle {
-                id: baseMarker
-                x: Math.max(2, Math.min(spectrumSurface.width - width - 2,
-                    (1 - root.wheelTone) * spectrumSurface.width - width / 2))
-                y: Math.max(2, Math.min(spectrumSurface.height - height - 2,
-                    root.wheelHue * spectrumSurface.height - height / 2))
-                width: 39
-                height: 39
-                radius: width / 2
-                color: root.basePreview
-                border.width: 3
+                color: "transparent"
+                border.width: diameter > 30 ? 3 : 2
                 border.color: "#ffffff"
-                z: 3
-                Rectangle {
-                    anchors.fill: parent
-                    anchors.margins: -3
-                    radius: width / 2
-                    color: "transparent"
-                    border.width: 1
-                    border.color: "#252525"
+                Behavior on x {
+                    enabled: !root.spectrumDragging
+                    NumberAnimation { duration: 100; easing.type: Easing.OutCubic }
                 }
-                Text {
-                    anchors.centerIn: parent
-                    text: "B"
-                    font.pixelSize: 13
-                    font.weight: Font.Bold
-                    color: root.wheelTone > 0.58 ? "#171717" : "#ffffff"
+                Behavior on y {
+                    enabled: !root.spectrumDragging
+                    NumberAnimation { duration: 100; easing.type: Easing.OutCubic }
                 }
             }
+
+            SpectrumRing { tone: root.lightTone; hue: root.wheelHue; diameter: 19; z: 2 }
+            SpectrumRing { tone: root.darkTone; hue: root.wheelHue; diameter: 19; z: 2 }
+            SpectrumRing { tone: root.wheelTone; hue: root.wheelHue; diameter: 34; z: 3 }
 
             MouseArea {
                 anchors.fill: parent
@@ -504,6 +554,98 @@ ColumnLayout {
         color: Colours.palette.m3outline
         font: Tokens.font.label.small
         wrapMode: Text.Wrap
+    }
+
+    CollapsibleSection {
+        title: qsTr("Advanced color editing")
+        description: qsTr("Edit an exact Material 3 role without losing generated tones. The standard Caelestia role editor remains available.")
+        expanded: false
+        showBackground: true
+
+        ColourRow {
+            keyName: "primary"
+            label: qsTr("Global system primary")
+            fallback: Colours.palette.m3primary
+        }
+        ColourRow {
+            keyName: "hyprland_border"
+            label: qsTr("Hyprland border")
+            fallback: Colours.palette.m3primary
+        }
+        ColourRow {
+            keyName: "folder_color"
+            label: qsTr("Folder icons")
+            fallback: Colours.palette.m3primary
+        }
+
+        StyledText {
+            text: root.profileState.activeProfileId
+                ? qsTr("Exact color for linked profile")
+                : qsTr("Create or link a profile for profile-specific role overrides")
+            color: Colours.palette.m3outline
+            font: Tokens.font.label.small
+            wrapMode: Text.Wrap
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Tokens.spacing.small
+            StyledRect {
+                Layout.fillWidth: true
+                implicitHeight: 38
+                radius: Tokens.rounding.medium
+                color: Colours.tPalette.m3surfaceContainerHigh
+                StyledTextField {
+                    id: exactRole
+                    anchors.fill: parent
+                    anchors.leftMargin: Tokens.padding.small
+                    anchors.rightMargin: Tokens.padding.small
+                    text: root.editedRole
+                    placeholderText: qsTr("Material role")
+                    onEditingFinished: root.editedRole = text.trim()
+                }
+            }
+            StyledRect {
+                Layout.fillWidth: true
+                implicitHeight: 38
+                radius: Tokens.rounding.medium
+                color: Colours.tPalette.m3surfaceContainerHigh
+                StyledTextField {
+                    id: exactHex
+                    anchors.fill: parent
+                    anchors.leftMargin: Tokens.padding.small
+                    anchors.rightMargin: Tokens.padding.small
+                    placeholderText: qsTr("#RRGGBB")
+                }
+            }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            IconTextButton {
+                icon: "check"
+                text: qsTr("Set exact")
+                enabled: !!root.profileState.activeProfileId
+                    && root.cleanHex(exactHex.text) !== ""
+                type: IconTextButton.Tonal
+                onClicked: root.profileRun(["set-role", "--id", root.profileState.activeProfileId,
+                                            "--role", exactRole.text.trim(),
+                                            "--color", exactHex.text.trim()])
+            }
+            IconTextButton {
+                icon: "restart_alt"
+                text: qsTr("Reset role")
+                enabled: !!root.profileState.activeProfileId
+                type: IconTextButton.Text
+                onClicked: root.profileRun(["reset-role", "--id", root.profileState.activeProfileId,
+                                            "--role", exactRole.text.trim()])
+            }
+        }
+        StyledText {
+            Layout.fillWidth: true
+            text: qsTr("Examples: primaryContainer, secondary, tertiaryContainer, onSurface, term0. Individual roles override generated colors; resetting restores generation.")
+            color: Colours.palette.m3outline
+            wrapMode: Text.Wrap
+            font: Tokens.font.label.small
+        }
     }
 
     SectionHeader { text: qsTr("Palette presets") }

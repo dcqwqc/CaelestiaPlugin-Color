@@ -6,10 +6,12 @@ Workshop ID, so the binding survives a different preview filename or host.
 Normal image paths use their path relative to ~/Pictures/Wallpapers when possible.
 """
 import argparse
+import copy
 import fcntl
 import json
 import os
 import re
+import sys
 import subprocess
 import uuid
 from contextlib import contextmanager
@@ -128,7 +130,13 @@ def active_profile(path=None, store=None):
 
 def merged_overrides(global_overrides, path=None, store=None):
     """Profile colors win over global defaults, exact role overrides win last."""
-    _, profile = active_profile(path, store)
+    try:
+        _, profile = active_profile(path, store)
+    except ValueError as exc:
+        # An invalid profile file must not stop Caelestia wallpaper and
+        # theme post-hooks. The corrupt original is never overwritten.
+        print(f"Color profile warning: {exc}", file=sys.stderr)
+        return global_overrides
     if profile is None:
         return global_overrides
     overlay = sanitize_profile(profile)
@@ -146,13 +154,60 @@ def refresh():
     subprocess.run([str(helper)], check=True, timeout=60)
 
 
+def profile_index(data):
+    """Summary payload with no change to on-disk profile schema."""
+    return {
+        "profiles": data["profiles"], "bindings": data["bindings"],
+        "version": data["version"],
+    }
+
+
+def snapshot_history(data):
+    """A single recoverable transaction for rename/edit/delete/link actions."""
+    data["_undo"] = {
+        "profiles": copy.deepcopy(data["profiles"]),
+        "bindings": copy.deepcopy(data["bindings"]),
+    }
+
+
+def restore_history(data):
+    previous = data.get("_undo")
+    if (not isinstance(previous, dict)
+            or not isinstance(previous.get("profiles"), dict)
+            or not isinstance(previous.get("bindings"), dict)):
+        raise ValueError("There is no profile operation to undo")
+    current = {"profiles": copy.deepcopy(data["profiles"]),
+               "bindings": copy.deepcopy(data["bindings"])}
+    data["profiles"] = previous["profiles"]
+    data["bindings"] = previous["bindings"]
+    data["_undo"] = current
+
+
+def profile_palette(data, ident, role, value=None):
+    from save_colors import ALLOWED_ROLES
+    if ident not in data["profiles"]:
+        raise ValueError("Unknown profile ID")
+    if role not in ALLOWED_ROLES:
+        raise ValueError("Unsupported Material 3/terminal role")
+    palette = data["profiles"][ident].setdefault("palette", {})
+    if value is None:
+        palette.pop(role, None)
+        if not palette:
+            data["profiles"][ident].pop("palette", None)
+    else:
+        palette[role] = clean_hex(value)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("status", "create", "link", "unlink", "edit", "delete"))
+    parser.add_argument("action", choices=("status", "create", "link", "unlink", "edit", "delete",
+                                          "duplicate", "set-role", "reset-role", "undo"))
     parser.add_argument("--id")
     parser.add_argument("--name")
     parser.add_argument("--primary")
     parser.add_argument("--accent")
+    parser.add_argument("--role")
+    parser.add_argument("--color")
     parser.add_argument("--wallpaper")
     args = parser.parse_args()
     key = wallpaper_key(args.wallpaper)
@@ -161,10 +216,14 @@ def main():
         selected, active = active_profile(args.wallpaper, d)
         print(json.dumps({"wallpaperKey": key, "activeProfileId": selected,
                           "activeProfile": active, "profiles": d["profiles"],
-                          "bindings": d["bindings"]}, ensure_ascii=False))
+                          "bindings": d["bindings"],
+                          "canUndo": isinstance(d.get("_undo"), dict)}, ensure_ascii=False))
         return
+    # Validate before taking any snapshot or committing any mutation.
     with locked_store() as d:
-        if args.action == "create":
+        if args.action == "undo":
+            restore_history(d)
+        elif args.action == "create":
             try:
                 existing = json.loads(GLOBAL.read_text())
             except (OSError, ValueError):
@@ -174,34 +233,64 @@ def main():
                 data["primary"] = clean_hex(args.primary)
             if args.accent:
                 data["accent"] = clean_hex(args.accent)
-            if args.name:
-                name = args.name.strip()[:80]
-            else:
-                name = "Wallpaper colors " + str(len(d["profiles"]) + 1)
-            identifier = uuid.uuid4().hex[:12]
-            d["profiles"][identifier] = {"name": name or "Untitled", **data}
+            name = args.name.strip()[:80] if args.name else "Wallpaper colors " + str(len(d["profiles"]) + 1)
+            snapshot_history(d)
+            ident = uuid.uuid4().hex[:12]
+            d["profiles"][ident] = {"name": name or "Untitled", **data}
             if key:
-                d["bindings"][key] = identifier
-            print(identifier)
+                d["bindings"][key] = ident
+            print(ident)
+        elif args.action == "duplicate":
+            if args.id not in d["profiles"]:
+                parser.error("Unknown profile --id")
+            profile = copy.deepcopy(d["profiles"][args.id])
+            profile["name"] = (args.name.strip()[:80] if args.name else
+                               (profile.get("name", "Untitled") + " copy")[:80])
+            snapshot_history(d)
+            ident = uuid.uuid4().hex[:12]
+            d["profiles"][ident] = profile
+            if key:
+                d["bindings"][key] = ident
+            print(ident)
         elif args.action == "link":
             if not key or args.id not in d["profiles"]:
                 parser.error("A current wallpaper and valid --id are required")
+            snapshot_history(d)
             d["bindings"][key] = args.id
         elif args.action == "unlink":
-            d["bindings"].pop(key, None)
+            if key in d["bindings"]:
+                snapshot_history(d)
+                d["bindings"].pop(key, None)
         elif args.action == "edit":
             if args.id not in d["profiles"]:
                 parser.error("Profile --id not found")
-            profile = d["profiles"][args.id]
+            values = {}
             for field in ("primary", "accent"):
                 value = getattr(args, field)
                 if value is not None:
-                    profile[field] = clean_hex(value)
+                    values[field] = clean_hex(value)
             if args.name is not None:
-                profile["name"] = args.name.strip()[:80] or "Untitled"
+                values["name"] = args.name.strip()[:80] or "Untitled"
+            if not values:
+                parser.error("Nothing to edit")
+            snapshot_history(d)
+            d["profiles"][args.id].update(values)
+        elif args.action in ("set-role", "reset-role"):
+            if args.role is None:
+                parser.error("--role is required")
+            if args.action == "set-role" and args.color is None:
+                parser.error("--color is required")
+            # Validate before committing the snapshot.
+            from save_colors import ALLOWED_ROLES
+            if args.id not in d["profiles"] or args.role not in ALLOWED_ROLES:
+                parser.error("Unknown profile or palette role")
+            value = clean_hex(args.color) if args.action == "set-role" else None
+            snapshot_history(d)
+            profile_palette(d, args.id, args.role, value)
         elif args.action == "delete":
             if args.id not in d["profiles"]:
                 parser.error("Profile --id not found")
+            snapshot_history(d)
             del d["profiles"][args.id]
             d["bindings"] = {k: v for k, v in d["bindings"].items() if v != args.id}
     refresh()
