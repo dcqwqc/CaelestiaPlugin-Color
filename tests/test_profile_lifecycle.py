@@ -34,6 +34,16 @@ class ProfileLifecycleTests(unittest.TestCase):
     def status(self):
         return json.loads(self.call("status"))
 
+    def test_spectrum_uses_only_three_plain_white_rings(self):
+        qml = (ROOT / "SettingsUi.qml").read_text()
+        self.assertEqual(qml.count("SpectrumRing { tone:"), 3)
+        self.assertIn('border.color: "#ffffff"', qml)
+        self.assertIn('color: "transparent"', qml)
+        self.assertNotIn('text: "B"', qml)
+        self.assertNotIn('text: "L"', qml)
+        self.assertNotIn('text: "D"', qml)
+        self.assertNotIn("Harmony mode", qml)
+
     def test_crud_undo_and_shared_profile_binding(self):
         original = self.status()
         self.assertEqual(original["wallpaperKey"], "wpe:3369752393")

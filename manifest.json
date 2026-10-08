@@ -1,10 +1,10 @@
 {
   "name": "Color",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "dcqwqc",
   "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-Color",
   "icon": "palette",
-  "description": "Exact Caelestia colour control: accent, Material palette roles, Hyprland chrome and folder icon colours. Hardware RGB is intentionally separate.",
+  "description": "Wallpaper-linked color profiles, a 2D harmony spectrum with white Light/Base/Dark markers, and exact advanced Material palette editing.",
   "entryPoints": [],
   "settings": "Settings.qml",
   "settingsUi": "SettingsUi.qml"
