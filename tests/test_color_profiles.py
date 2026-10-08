@@ -35,6 +35,30 @@ class ColorProfilesTests(unittest.TestCase):
         self.assertEqual(merged["palette"], {"onPrimary": "000000", "surface": "111111"})
         self.assertEqual(base["primary"], "ff0000")
 
+    def test_neutral_snapshot_does_not_freeze_light_mode(self):
+        from save_colors import NEUTRAL_LIGHT
+        source = {"primary": "234c15", "palette": {
+            **NEUTRAL_LIGHT, "tertiary": "aabbcc"
+        }, "neutral_preset_mode": "light"}
+        snapshot = cp.snapshot_overrides(source)
+        self.assertEqual(snapshot["primary"], "234c15")
+        self.assertEqual(snapshot["palette"], {"tertiary": "aabbcc"})
+        self.assertNotIn("mode", snapshot)
+
+    def test_corrupted_store_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original_store = cp.STORE
+            path = Path(tmp) / "profiles.json"
+            path.write_text("{broken JSON")
+            cp.STORE = path
+            try:
+                with self.assertRaises(ValueError):
+                    with cp.locked_store() as data:
+                        data["profiles"]["new"] = {}
+                self.assertEqual(path.read_text(), "{broken JSON")
+            finally:
+                cp.STORE = original_store
+
     def test_create_edit_link_unlink_and_persistence(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "wallpaper_profiles.json"

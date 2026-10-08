@@ -97,6 +97,28 @@ def sanitize_profile(profile):
     return out
 
 
+def snapshot_overrides(overrides):
+    """Capture hand-edited colors, but not an old mode's neutral preset.
+
+    A saved light preset must never freeze a linked wallpaper in light mode.
+    Existing global neutral preset colors continue to follow scheme changes.
+    """
+    data = sanitize_profile(overrides)
+    palette = data.get("palette", {})
+    if palette:
+        from save_colors import NEUTRAL_LIGHT, NEUTRAL_DARK
+        presets = (NEUTRAL_LIGHT, NEUTRAL_DARK)
+        matching = max(presets, key=lambda preset: sum(palette.get(k) == v for k, v in preset.items()))
+        score = sum(palette.get(k) == v for k, v in matching.items())
+        if score >= len(matching) - 2:
+            palette = {k: v for k, v in palette.items() if k not in matching or v != matching[k]}
+            if palette:
+                data["palette"] = palette
+            else:
+                data.pop("palette", None)
+    return data
+
+
 def active_profile(path=None, store=None):
     data = store if store is not None else load()
     identifier = data.get("bindings", {}).get(wallpaper_key(path))
@@ -147,7 +169,7 @@ def main():
                 existing = json.loads(GLOBAL.read_text())
             except (OSError, ValueError):
                 existing = {}
-            data = sanitize_profile(existing)
+            data = snapshot_overrides(existing)
             if args.primary:
                 data["primary"] = clean_hex(args.primary)
             if args.accent:
