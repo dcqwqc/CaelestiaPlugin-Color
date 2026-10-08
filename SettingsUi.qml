@@ -19,6 +19,16 @@ ColumnLayout {
     property var profileState: ({ profiles: {}, bindings: {}, activeProfileId: null })
     property string wheelTarget: "primary"
     property real wheelHue: 0.96
+    // A two-dimensional spectrum: vertical hue, horizontal tonal brightness.
+    // Base is the only draggable anchor. Light and Dark follow automatically.
+    property real wheelTone: 0.58
+    property real wheelSaturation: 0.74
+    readonly property real lightTone: Math.min(0.96, wheelTone + 0.24)
+    readonly property real darkTone: Math.max(0.08, wheelTone - 0.25)
+    readonly property color basePreview: Qt.hsla(wheelHue, wheelSaturation, wheelTone, 1)
+    readonly property color lightPreview: Qt.hsla(wheelHue, wheelSaturation, lightTone, 1)
+    readonly property color darkPreview: Qt.hsla(wheelHue, wheelSaturation, darkTone, 1)
+    property bool spectrumDragging: false
     readonly property string profileHelper: Qt.resolvedUrl("scripts/color_profiles.py").toString().replace("file://", "")
     readonly property string profilesPath: Quickshell.env("HOME") + "/.config/caelestia/wallpaper_profiles.json"
     readonly property string wallpaperPath: Quickshell.env("HOME") + "/.local/state/caelestia/wallpaper/path.txt"
@@ -61,27 +71,68 @@ ColumnLayout {
     }
 
     function hueFromHex(value): real {
-        const color = root.cleanHex(value);
-        if (!color) return 0.96;
-        const r = parseInt(color.slice(0, 2), 16) / 255;
-        const g = parseInt(color.slice(2, 4), 16) / 255;
-        const b = parseInt(color.slice(4, 6), 16) / 255;
+        const hex = root.cleanHex(value);
+        if (!hex) return 0.96;
+        const r = parseInt(hex.slice(0, 2), 16) / 255;
+        const g = parseInt(hex.slice(2, 4), 16) / 255;
+        const b = parseInt(hex.slice(4, 6), 16) / 255;
         const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min;
         if (delta === 0) return 0;
         let h = max === r ? (g - b) / delta : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4;
         return ((h / 6) + 1) % 1;
     }
 
-    function loadWheel(): void {
-        const active = root.profileState.activeProfile || ({});
-        root.wheelHue = root.hueFromHex(active[root.wheelTarget]);
+    function toneFromHex(value): real {
+        const hex = root.cleanHex(value);
+        if (!hex) return 0.58;
+        const r = parseInt(hex.slice(0, 2), 16) / 255;
+        const g = parseInt(hex.slice(2, 4), 16) / 255;
+        const b = parseInt(hex.slice(4, 6), 16) / 255;
+        return (Math.max(r, g, b) + Math.min(r, g, b)) / 2;
     }
 
-    function applyWheel(): void {
-        if (!root.profileState.activeProfileId) return;
-        const hex = root.cleanHex(Qt.hsla(root.wheelHue, 0.68, 0.60, 1).toString());
-        if (hex)
+    function saturationFromHex(value): real {
+        const hex = root.cleanHex(value);
+        if (!hex) return 0.74;
+        const r = parseInt(hex.slice(0, 2), 16) / 255;
+        const g = parseInt(hex.slice(2, 4), 16) / 255;
+        const b = parseInt(hex.slice(4, 6), 16) / 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        const d = max - min, l = (max + min) / 2;
+        return d < 0.00001 ? 0 : d / (1 - Math.abs(2 * l - 1));
+    }
+
+    function loadWheel(): void {
+        if (root.spectrumDragging)
+            return;
+        const active = root.profileState.activeProfile || ({});
+        const value = active[root.wheelTarget]
+            || root.overrides[root.wheelTarget]
+            || (root.wheelTarget === "primary"
+                ? Colours.palette.m3primary.toString() : Colours.palette.m3secondary.toString());
+        root.wheelHue = root.hueFromHex(value);
+        root.wheelTone = root.toneFromHex(value);
+        root.wheelSaturation = root.saturationFromHex(value);
+        // A neutral original still needs a chromatic plane to select from.
+        if (root.wheelSaturation < 0.08)
+            root.wheelSaturation = 0.74;
+    }
+
+    function updateSpectrumPosition(x: real, y: real, width: real, height: real): void {
+        // Hue wraps at the top/bottom edge. Keep the circle fully inside the field.
+        const xFraction = Math.max(0.04, Math.min(0.96, x / Math.max(1, width)));
+        const yFraction = Math.max(0.001, Math.min(0.999, y / Math.max(1, height)));
+        root.wheelTone = 1 - xFraction;
+        root.wheelHue = yFraction;
+    }
+
+    function applySpectrum(): void {
+        const hex = root.cleanHex(root.basePreview.toString());
+        if (!hex) return;
+        if (root.profileState.activeProfileId)
             root.profileRun(["edit", "--id", root.profileState.activeProfileId, "--" + root.wheelTarget, hex]);
+        else
+            root.run(["--" + root.wheelTarget, hex]);
     }
 
     function resetValue(key): void {
@@ -100,7 +151,10 @@ ColumnLayout {
         path: root.overridesPath
         watchChanges: true
         printErrors: false
-        onLoaded: root.ingest(text())
+        onLoaded: {
+            root.ingest(text());
+            root.loadWheel();
+        }
         onFileChanged: reload()
         onLoadFailed: root.overrides = ({})
     }
@@ -224,7 +278,7 @@ ColumnLayout {
         }
     }
 
-    SectionHeader { text: qsTr("Harmony wheel") }
+    SectionHeader { text: qsTr("Color spectrum") }
 
     RowLayout {
         Layout.fillWidth: true
@@ -250,72 +304,206 @@ ColumnLayout {
     }
 
     Item {
-        id: hueTrack
+        id: spectrumField
         Layout.fillWidth: true
-        implicitHeight: 44
-        enabled: !!root.profileState.activeProfileId
-        opacity: enabled ? 1 : 0.45
-
-        Canvas {
-            id: spectrum
+        implicitHeight: 232
+        // Works on the global palette by default; if a wallpaper profile is
+        // linked, only that profile is edited instead of changing global colors.
+        // Rainbow HUE runs vertically; tonal brightness runs left (light)
+        // to right (dark), so all three markers represent real field colors.
+        StyledRect {
+            id: spectrumSurface
             anchors.fill: parent
-            onPaint: {
-                const ctx = getContext("2d");
-                ctx.clearRect(0, 0, width, height);
-                const gradient = ctx.createLinearGradient(12, 0, width - 12, 0);
-                const hues = ["#f26868", "#efcc67", "#83d887", "#70cbd0", "#8598e8", "#d187db", "#f26868"];
-                for (let i = 0; i < hues.length; ++i)
-                    gradient.addColorStop(i / (hues.length - 1), hues[i]);
-                ctx.fillStyle = gradient;
-                ctx.beginPath();
-                ctx.roundedRect(12, 11, width - 24, 22, 11, 11);
-                ctx.fill();
-            }
-            onWidthChanged: requestPaint()
-        }
+            radius: Tokens.rounding.large
+            clip: true
+            color: Colours.palette.m3surfaceContainer
+            border.width: 1
+            border.color: Colours.palette.m3outlineVariant
 
-        Rectangle {
-            x: 12 + root.wheelHue * (hueTrack.width - 24) - width / 2
-            anchors.verticalCenter: parent.verticalCenter
-            width: 27
-            height: 27
-            radius: width / 2
-            color: Qt.hsla(root.wheelHue, 0.68, 0.60, 1)
-            border.width: 2
-            border.color: Colours.palette.m3onSurface
-        }
-
-        MouseArea {
-            anchors.fill: parent
-            onPressed: event => root.wheelHue = Math.max(0, Math.min(1, (event.x - 12) / (hueTrack.width - 24)))
-            onPositionChanged: event => {
-                if (pressed) root.wheelHue = Math.max(0, Math.min(1, (event.x - 12) / (hueTrack.width - 24)));
+            Canvas {
+                id: spectrum
+                anchors.fill: parent
+                renderTarget: Canvas.Image
+                onPaint: {
+                    const ctx = getContext("2d");
+                    ctx.clearRect(0, 0, width, height);
+                    const rows = Math.max(100, Math.ceil(height));
+                    for (let row = 0; row < rows; ++row) {
+                        const hue = row / rows;
+                        const g = ctx.createLinearGradient(0, 0, width, 0);
+                        // Use the same HSL coordinates as the markers. The
+                        // mid-tones retain hue; white/black live at the edges.
+                        for (let i = 0; i <= 20; ++i)
+                            g.addColorStop(i / 20, Qt.hsla(hue, root.wheelSaturation, 1 - i / 20, 1).toString());
+                        ctx.fillStyle = g;
+                        ctx.fillRect(0, row * height / rows, width, height / rows + 1);
+                    }
+                }
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+                Connections {
+                    target: root
+                    function onWheelSaturationChanged(): void { spectrum.requestPaint(); }
+                }
             }
-            onReleased: root.applyWheel()
+
+            // These two smaller markers are derived tones, not independent
+            // controls. Their positions follow the primary Base marker.
+            Rectangle {
+                id: lightMarker
+                x: Math.max(2, Math.min(spectrumSurface.width - width - 2,
+                    (1 - root.lightTone) * spectrumSurface.width - width / 2))
+                y: Math.max(2, Math.min(spectrumSurface.height - height - 2,
+                    root.wheelHue * spectrumSurface.height - height / 2))
+                width: 24
+                height: 24
+                radius: width / 2
+                color: root.lightPreview
+                border.width: 2
+                border.color: "#303030"
+                z: 2
+                Behavior on x {
+                    NumberAnimation { duration: 105; easing.type: Easing.OutCubic }
+                }
+                Behavior on y {
+                    NumberAnimation { duration: 105; easing.type: Easing.OutCubic }
+                }
+                Text {
+                    anchors.centerIn: parent
+                    text: "L"
+                    font.pixelSize: 11
+                    font.weight: Font.Bold
+                    color: "#171717"
+                }
+            }
+            Rectangle {
+                id: darkMarker
+                x: Math.max(2, Math.min(spectrumSurface.width - width - 2,
+                    (1 - root.darkTone) * spectrumSurface.width - width / 2))
+                y: Math.max(2, Math.min(spectrumSurface.height - height - 2,
+                    root.wheelHue * spectrumSurface.height - height / 2))
+                width: 24
+                height: 24
+                radius: width / 2
+                color: root.darkPreview
+                border.width: 2
+                border.color: "#f5f5f5"
+                z: 2
+                Behavior on x {
+                    NumberAnimation { duration: 105; easing.type: Easing.OutCubic }
+                }
+                Behavior on y {
+                    NumberAnimation { duration: 105; easing.type: Easing.OutCubic }
+                }
+                Text {
+                    anchors.centerIn: parent
+                    text: "D"
+                    font.pixelSize: 11
+                    font.weight: Font.Bold
+                    color: "#ffffff"
+                }
+            }
+            Rectangle {
+                id: baseMarker
+                x: Math.max(2, Math.min(spectrumSurface.width - width - 2,
+                    (1 - root.wheelTone) * spectrumSurface.width - width / 2))
+                y: Math.max(2, Math.min(spectrumSurface.height - height - 2,
+                    root.wheelHue * spectrumSurface.height - height / 2))
+                width: 39
+                height: 39
+                radius: width / 2
+                color: root.basePreview
+                border.width: 3
+                border.color: "#ffffff"
+                z: 3
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: -3
+                    radius: width / 2
+                    color: "transparent"
+                    border.width: 1
+                    border.color: "#252525"
+                }
+                Text {
+                    anchors.centerIn: parent
+                    text: "B"
+                    font.pixelSize: 13
+                    font.weight: Font.Bold
+                    color: root.wheelTone > 0.58 ? "#171717" : "#ffffff"
+                }
+            }
+
+            MouseArea {
+                anchors.fill: parent
+                enabled: spectrumField.enabled
+                z: 5
+                preventStealing: true
+                onPressed: event => {
+                    root.spectrumDragging = true;
+                    root.updateSpectrumPosition(event.x, event.y, width, height);
+                }
+                onPositionChanged: event => {
+                    if (pressed)
+                        root.updateSpectrumPosition(event.x, event.y, width, height);
+                }
+                onReleased: {
+                    root.applySpectrum();
+                    root.spectrumDragging = false;
+                }
+                onCanceled: {
+                    root.spectrumDragging = false;
+                    root.loadWheel();
+                }
+            }
+        }
+    }
+
+    RowLayout {
+        Layout.fillWidth: true
+        spacing: Tokens.spacing.small
+        Repeater {
+            model: [
+                { label: qsTr("Light"), tone: "light" },
+                { label: qsTr("Base"), tone: "base" },
+                { label: qsTr("Dark"), tone: "dark" }
+            ]
+            delegate: StyledRect {
+                required property var modelData
+                Layout.fillWidth: true
+                implicitHeight: 54
+                radius: Tokens.rounding.medium
+                color: Colours.tPalette.m3surfaceContainer
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: Tokens.padding.small
+                    spacing: Tokens.spacing.extraSmall
+                    Rectangle {
+                        implicitWidth: 22
+                        implicitHeight: 22
+                        radius: width / 2
+                        color: modelData.tone === "light" ? root.lightPreview
+                            : modelData.tone === "base" ? root.basePreview : root.darkPreview
+                        border.width: 1
+                        border.color: Colours.palette.m3outlineVariant
+                    }
+                    StyledText {
+                        text: modelData.label
+                        font: Tokens.font.label.small
+                        color: Colours.palette.m3onSurface
+                    }
+                }
+            }
         }
     }
 
     StyledText {
         Layout.fillWidth: true
-        text: qsTr("Drag one dot. Material 3 generates tonal shades and contrasting secondary/tertiary colors. Advanced exact color settings remain below.")
+        text: root.profileState.activeProfileId
+            ? qsTr("Editing this wallpaper profile. Drag Base; Light and Dark follow. Release to apply.")
+            : qsTr("Editing global colors. Drag Base; Light and Dark follow. Release to apply. Link a profile above for wallpaper-specific colors.")
         color: Colours.palette.m3outline
         font: Tokens.font.label.small
         wrapMode: Text.Wrap
-    }
-
-    RowLayout {
-        Layout.fillWidth: true
-        spacing: Tokens.spacing.medium
-        Repeater {
-            model: [Colours.palette.m3primary, Colours.palette.m3primaryContainer, Colours.palette.m3secondary, Colours.palette.m3tertiary]
-            delegate: StyledRect {
-                required property color modelData
-                Layout.fillWidth: true
-                implicitHeight: 30
-                radius: Tokens.rounding.medium
-                color: modelData
-            }
-        }
     }
 
     SectionHeader { text: qsTr("Palette presets") }

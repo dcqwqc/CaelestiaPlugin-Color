@@ -97,12 +97,14 @@ def clean_palette(value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--primary")
+    parser.add_argument("--accent")
     parser.add_argument("--border")
     parser.add_argument("--folder")
     parser.add_argument("--palette-json")
     parser.add_argument("--saved-json")
     parser.add_argument("--preset", choices=["neutral-light", "neutral-dark", "clear-palette"])
     parser.add_argument("--reset-primary", action="store_true")
+    parser.add_argument("--reset-accent", action="store_true")
     parser.add_argument("--reset-border", action="store_true")
     parser.add_argument("--reset-folder", action="store_true")
     args = parser.parse_args()
@@ -124,6 +126,11 @@ def main():
         overrides.pop("primary", None)
     elif (value := clean_hex(args.primary)):
         overrides["primary"] = value
+
+    if args.reset_accent:
+        overrides.pop("accent", None)
+    elif (value := clean_hex(args.accent)):
+        overrides["accent"] = value
 
     if args.reset_border:
         overrides.pop("hyprland_border", None)
