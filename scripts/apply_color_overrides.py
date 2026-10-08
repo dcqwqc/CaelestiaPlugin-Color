@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import glob
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
@@ -9,6 +10,8 @@ import shutil
 
 from caelestia.utils.scheme import get_scheme
 from caelestia.utils.theme import apply_colours
+from color_profiles import merged_overrides
+from save_colors import NEUTRAL_LIGHT, NEUTRAL_DARK
 
 ICON_ROOTS = [str(Path.home() / ".local/share/icons"), "/usr/share/icons"]
 PAPIRUS_THEMES = ["Papirus", "Papirus-Dark", "Papirus-Light"]
@@ -99,6 +102,11 @@ def generate_custom_papirus(hex_color):
 
 
 def main():
+    # apply_colours invokes the configured theme postHook. Since this script
+    # *is* the hook, nested invocations must stop immediately. Otherwise the
+    # entire palette and Papirus workflow runs twice for a single selection.
+    if os.environ.get("CAELESTIA_COLOR_REENTRANT") == "1":
+        return
     config_dir = Path.home() / ".config/caelestia"
     overrides_file = config_dir / "color_overrides.json"
 
@@ -111,17 +119,39 @@ def main():
         except Exception:
             pass
 
+    # The Caelestia scheme is the single source of truth for light/dark.
+    # The old `mode` override used to reset user-selected dark mode to light
+    # whenever the theme or wallpaper hook was called.
+    legacy_mode = overrides.pop("mode", None)
+    old_mode = overrides.get("neutral_preset_mode")
+    if old_mode not in ("light", "dark") and legacy_mode in ("light", "dark"):
+        old_neutral = NEUTRAL_LIGHT if legacy_mode == "light" else NEUTRAL_DARK
+        palette = overrides.get("palette", {})
+        if isinstance(palette, dict) and sum(
+            palette.get(k) == v for k, v in old_neutral.items()
+        ) >= len(old_neutral) - 2:
+            old_mode = legacy_mode
+
+    if old_mode in ("light", "dark"):
+        old_neutral = NEUTRAL_LIGHT if old_mode == "light" else NEUTRAL_DARK
+        new_neutral = NEUTRAL_LIGHT if scheme.mode == "light" else NEUTRAL_DARK
+        palette = overrides.get("palette", {})
+        if isinstance(palette, dict):
+            for role, value in old_neutral.items():
+                # Rebase only preset colours; explicit custom edits stay intact.
+                if palette.get(role) == value:
+                    palette[role] = new_neutral[role]
+        overrides["neutral_preset_mode"] = scheme.mode
+
+    # Keep swatches in the editor aligned with the active light/dark palette.
+    if legacy_mode is not None or overrides.get("neutral_preset_mode") != old_mode:
+        tmp = overrides_file.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(overrides, indent=4))
+        tmp.replace(overrides_file)
+    # Apply wallpaper-linked colors as an in-memory overlay. Never overwrite
+    # the user's global overrides when switching wallpapers.
+    overrides = merged_overrides(overrides)
     primary_override = overrides.get("primary")
-    desired_mode = overrides.get("mode")
-
-    # Keep the chosen shared appearance mode when changing wallpapers. Dynamic
-    # schemes support both modes; non-dynamic themes may expose fewer choices.
-    if desired_mode:
-        try:
-            scheme.mode = desired_mode
-        except ValueError:
-            print(f"Scheme mode {desired_mode!r} is unavailable for {scheme.name!r}; keeping {scheme.mode!r}")
-
     if primary_override:
         # Regenerate the full M3 palette from the override color so secondary/tertiary
         # also harmonize with the chosen color instead of keeping wallpaper-derived tones.
@@ -141,6 +171,20 @@ def main():
         scheme._update_colours()
         colours = dict(scheme.colours)
 
+    accent_seed = overrides.get("accent")
+    if accent_seed:
+        try:
+            from materialyoucolor.hct import Hct
+            from caelestia.utils.material.generator import gen_scheme
+            accent_colours = gen_scheme(scheme, Hct.from_int(0xFF000000 | int(accent_seed, 16)))
+            # Both families preserve M3 tone steps and contrast. Exact role
+            # edits still take priority below.
+            for role, colour in accent_colours.items():
+                if role.startswith(("secondary", "tertiary", "onSecondary", "onTertiary")):
+                    colours[role] = colour
+        except Exception as e:
+            print("Accent palette generation failed:", e)
+
     # Per-role overrides are deliberately applied *after* Material 3 palette
     # generation. This makes the seed colour a convenient starting point while
     # still allowing exact control of every shell colour without the generator
@@ -157,7 +201,15 @@ def main():
     scheme._colours = colours
     scheme.save()
 
-    apply_colours(scheme.colours, scheme.mode)
+    old_guard = os.environ.get("CAELESTIA_COLOR_REENTRANT")
+    os.environ["CAELESTIA_COLOR_REENTRANT"] = "1"
+    try:
+        apply_colours(scheme.colours, scheme.mode)
+    finally:
+        if old_guard is None:
+            os.environ.pop("CAELESTIA_COLOR_REENTRANT", None)
+        else:
+            os.environ["CAELESTIA_COLOR_REENTRANT"] = old_guard
 
     # Ghostty intentionally stays dark even when the desktop is light, but its
     # terminal palette follows the dark variant of the active Caelestia scheme.
@@ -177,6 +229,9 @@ def main():
         rendered_primary = str(scheme.colours.get("primary", primary_override or "89b4fa")).strip().lstrip("#")
         if not re.fullmatch(r"[0-9a-fA-F]{6}", rendered_primary):
             rendered_primary = "89b4fa"
+        rendered_secondary = str(scheme.colours.get("secondary", rendered_primary)).strip().lstrip("#")
+        if not re.fullmatch(r"[0-9a-fA-F]{6}", rendered_secondary):
+            rendered_secondary = rendered_primary
         ht_dir = Path.home() / ".config/hypr"
         ht_dir.mkdir(parents=True, exist_ok=True)
         ht_conf = ht_dir / "hyprtoolkit.conf"
@@ -189,7 +244,7 @@ def main():
             "alternate_base = 0xFF202020\n"
             "bright_text = 0xFFFFFFFF\n"
             f"accent = 0xFF{rendered_primary.upper()}\n"
-            f"accent_secondary = 0xFF{rendered_primary.upper()}\n"
+            f"accent_secondary = 0xFF{rendered_secondary.upper()}\n"
             "rounding_large = 14\n"
             "rounding_small = 8\n"
         )
@@ -215,18 +270,26 @@ def main():
 
     folder_override = overrides.get("folder_color")
     papirus_folders = shutil.which("papirus-folders")
-    if folder_override and papirus_folders:
-        generate_custom_papirus(folder_override)
-        # Papirus-Light and Papirus-Dark symlink their larger size directories
-        # into the base Papirus theme, so the base theme has to be recoloured
-        # too or every icon above 24x24 stays upstream blue.
-        for theme in PAPIRUS_THEMES:
-            subprocess.run([papirus_folders, "-C", "custom", "-t", theme, "-u"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    elif papirus_folders:
-        for theme in PAPIRUS_THEMES:
-            subprocess.run([papirus_folders, "-D", "-t", theme, "-u"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        print("papirus-folders is not installed; keeping the current folder icons")
+    icon_stamp_path = Path.home() / ".local/state/caelestia/color-folder-stamp.json"
+    icon_stamp = {"color": folder_override or "", "papirus": bool(papirus_folders)}
+    try:
+        old_stamp = json.loads(icon_stamp_path.read_text())
+    except (OSError, ValueError):
+        old_stamp = None
+    if old_stamp != icon_stamp:
+        if folder_override and papirus_folders:
+            generate_custom_papirus(folder_override)
+            for theme in PAPIRUS_THEMES:
+                subprocess.run([papirus_folders, "-C", "custom", "-t", theme, "-u"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif papirus_folders:
+            for theme in PAPIRUS_THEMES:
+                subprocess.run([papirus_folders, "-D", "-t", theme, "-u"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        icon_stamp_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = icon_stamp_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(icon_stamp) + chr(10))
+        tmp.replace(icon_stamp_path)
 
     subprocess.run(["hyprctl", "reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     

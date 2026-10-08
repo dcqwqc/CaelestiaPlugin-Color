@@ -97,12 +97,14 @@ def clean_palette(value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--primary")
+    parser.add_argument("--accent")
     parser.add_argument("--border")
     parser.add_argument("--folder")
     parser.add_argument("--palette-json")
     parser.add_argument("--saved-json")
     parser.add_argument("--preset", choices=["neutral-light", "neutral-dark", "clear-palette"])
     parser.add_argument("--reset-primary", action="store_true")
+    parser.add_argument("--reset-accent", action="store_true")
     parser.add_argument("--reset-border", action="store_true")
     parser.add_argument("--reset-folder", action="store_true")
     args = parser.parse_args()
@@ -124,6 +126,11 @@ def main():
         overrides.pop("primary", None)
     elif (value := clean_hex(args.primary)):
         overrides["primary"] = value
+
+    if args.reset_accent:
+        overrides.pop("accent", None)
+    elif (value := clean_hex(args.accent)):
+        overrides["accent"] = value
 
     if args.reset_border:
         overrides.pop("hyprland_border", None)
@@ -160,18 +167,21 @@ def main():
         if not saved:
             overrides.pop("saved_colors", None)
 
+    # The scheme's mode is authoritative. Never pin it in plugin overrides.
+    overrides.pop("mode", None)
     if args.preset == "neutral-light":
         palette = clean_palette(overrides.get("palette", {}))
         palette.update(NEUTRAL_LIGHT)
         overrides["palette"] = palette
-        overrides["mode"] = "light"
+        overrides["neutral_preset_mode"] = "light"
     elif args.preset == "neutral-dark":
         palette = clean_palette(overrides.get("palette", {}))
         palette.update(NEUTRAL_DARK)
         overrides["palette"] = palette
-        overrides["mode"] = "dark"
+        overrides["neutral_preset_mode"] = "dark"
     elif args.preset == "clear-palette":
         overrides.pop("palette", None)
+        overrides.pop("neutral_preset_mode", None)
 
     config_dir.mkdir(parents=True, exist_ok=True)
     tmp = overrides_file.with_suffix(".json.tmp")
@@ -195,6 +205,15 @@ def main():
                 pass
         subprocess.run(
             ["caelestia", "scheme", "set", "-m", mode],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    # Palette preset buttons also select the corresponding Caelestia mode.
+    # A normal dark-theme toggle remains free to change it again later.
+    if args.preset in ("neutral-light", "neutral-dark"):
+        subprocess.run(
+            ["caelestia", "scheme", "set", "-m", args.preset.removeprefix("neutral-")],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
