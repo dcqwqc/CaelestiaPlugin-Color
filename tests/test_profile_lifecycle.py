@@ -35,7 +35,9 @@ class ProfileLifecycleTests(unittest.TestCase):
         return json.loads(self.call("status"))
 
     def test_spectrum_uses_only_three_plain_white_rings(self):
-        qml = (ROOT / "SettingsUi.qml").read_text()
+        qml = (ROOT / "QuickColors.qml").read_text()
+        settings = (ROOT / "SettingsUi.qml").read_text()
+        self.assertIn("QuickColors {", settings)
         self.assertEqual(qml.count("SpectrumRing { tone:"), 3)
         self.assertIn('border.color: "#ffffff"', qml)
         self.assertIn('color: "transparent"', qml)
