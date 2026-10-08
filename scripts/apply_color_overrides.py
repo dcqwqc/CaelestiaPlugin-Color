@@ -11,6 +11,7 @@ import shutil
 from caelestia.utils.scheme import get_scheme
 from caelestia.utils.theme import apply_colours
 from color_profiles import merged_overrides
+from save_colors import NEUTRAL_LIGHT, NEUTRAL_DARK
 
 ICON_ROOTS = [str(Path.home() / ".local/share/icons"), "/usr/share/icons"]
 PAPIRUS_THEMES = ["Papirus", "Papirus-Dark", "Papirus-Light"]
@@ -118,20 +119,39 @@ def main():
         except Exception:
             pass
 
+    # The Caelestia scheme is the single source of truth for light/dark.
+    # The old `mode` override used to reset user-selected dark mode to light
+    # whenever the theme or wallpaper hook was called.
+    legacy_mode = overrides.pop("mode", None)
+    old_mode = overrides.get("neutral_preset_mode")
+    if old_mode not in ("light", "dark") and legacy_mode in ("light", "dark"):
+        old_neutral = NEUTRAL_LIGHT if legacy_mode == "light" else NEUTRAL_DARK
+        palette = overrides.get("palette", {})
+        if isinstance(palette, dict) and sum(
+            palette.get(k) == v for k, v in old_neutral.items()
+        ) >= len(old_neutral) - 2:
+            old_mode = legacy_mode
+
+    if old_mode in ("light", "dark"):
+        old_neutral = NEUTRAL_LIGHT if old_mode == "light" else NEUTRAL_DARK
+        new_neutral = NEUTRAL_LIGHT if scheme.mode == "light" else NEUTRAL_DARK
+        palette = overrides.get("palette", {})
+        if isinstance(palette, dict):
+            for role, value in old_neutral.items():
+                # Rebase only preset colours; explicit custom edits stay intact.
+                if palette.get(role) == value:
+                    palette[role] = new_neutral[role]
+        overrides["neutral_preset_mode"] = scheme.mode
+
+    # Keep swatches in the editor aligned with the active light/dark palette.
+    if legacy_mode is not None or overrides.get("neutral_preset_mode") != old_mode:
+        tmp = overrides_file.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(overrides, indent=4))
+        tmp.replace(overrides_file)
     # Apply wallpaper-linked colors as an in-memory overlay. Never overwrite
     # the user's global overrides when switching wallpapers.
     overrides = merged_overrides(overrides)
     primary_override = overrides.get("primary")
-    desired_mode = overrides.get("mode")
-
-    # Keep the chosen shared appearance mode when changing wallpapers. Dynamic
-    # schemes support both modes; non-dynamic themes may expose fewer choices.
-    if desired_mode:
-        try:
-            scheme.mode = desired_mode
-        except ValueError:
-            print(f"Scheme mode {desired_mode!r} is unavailable for {scheme.name!r}; keeping {scheme.mode!r}")
-
     if primary_override:
         # Regenerate the full M3 palette from the override color so secondary/tertiary
         # also harmonize with the chosen color instead of keeping wallpaper-derived tones.

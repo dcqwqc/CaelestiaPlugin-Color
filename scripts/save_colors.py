@@ -167,18 +167,21 @@ def main():
         if not saved:
             overrides.pop("saved_colors", None)
 
+    # The scheme's mode is authoritative. Never pin it in plugin overrides.
+    overrides.pop("mode", None)
     if args.preset == "neutral-light":
         palette = clean_palette(overrides.get("palette", {}))
         palette.update(NEUTRAL_LIGHT)
         overrides["palette"] = palette
-        overrides["mode"] = "light"
+        overrides["neutral_preset_mode"] = "light"
     elif args.preset == "neutral-dark":
         palette = clean_palette(overrides.get("palette", {}))
         palette.update(NEUTRAL_DARK)
         overrides["palette"] = palette
-        overrides["mode"] = "dark"
+        overrides["neutral_preset_mode"] = "dark"
     elif args.preset == "clear-palette":
         overrides.pop("palette", None)
+        overrides.pop("neutral_preset_mode", None)
 
     config_dir.mkdir(parents=True, exist_ok=True)
     tmp = overrides_file.with_suffix(".json.tmp")
@@ -202,6 +205,15 @@ def main():
                 pass
         subprocess.run(
             ["caelestia", "scheme", "set", "-m", mode],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    # Palette preset buttons also select the corresponding Caelestia mode.
+    # A normal dark-theme toggle remains free to change it again later.
+    if args.preset in ("neutral-light", "neutral-dark"):
+        subprocess.run(
+            ["caelestia", "scheme", "set", "-m", args.preset.removeprefix("neutral-")],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
