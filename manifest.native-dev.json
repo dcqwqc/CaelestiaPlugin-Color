@@ -1,0 +1,12 @@
+{
+  "name": "Color",
+  "version": "0.2.1",
+  "author": "dcqwqc",
+  "homepage": "https://github.com/dcqwqc/CaelestiaPlugin-Color",
+  "icon": "palette",
+  "description": "Wallpaper-linked color profiles, a 2D harmony spectrum with white Light/Base/Dark markers, and exact advanced Material palette editing.",
+  "entryPoints": [],
+  "settings": "Settings.qml",
+  "settingsUi": "SettingsUi.qml",
+  "requires": ">=2.1.0"
+}
